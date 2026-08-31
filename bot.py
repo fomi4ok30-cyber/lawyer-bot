@@ -69,7 +69,7 @@ Core rules:
 5. Add a brief legal disclaimer that advice is for analytical and educational purposes.
 """
 
-model = genai.GenerativeModel("gemini-1.5-pro-latest", system_instruction=SYSTEM_PROMPT)
+model = genai.GenerativeModel("gemini-1.5-flash", system_instruction=SYSTEM_PROMPT)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
