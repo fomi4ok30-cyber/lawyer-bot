@@ -1,6 +1,7 @@
 import os
 import io
 import asyncio
+from aiohttp import web
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
 from aiogram.types import (
@@ -157,8 +158,12 @@ async def handle_text(message: types.Message):
         await deduct_credit(message.from_user.id)
         left = user['credits'] - 1
         credits_notice = f"\n\n_(Осталось консультаций: {left})_" if lang == 'ru' else f"\n\n_(Consultations left: {left})_"
-        await message.answer(response.text + credits_notice, parse_mode="Markdown")
-    except Exception:
+        try:
+            await message.answer(response.text + credits_notice, parse_mode="Markdown")
+        except Exception:
+            await message.answer(response.text + credits_notice)
+    except Exception as e:
+        print(f"DEBUG GEMINI ERROR: {e}")
         await message.answer(MESSAGES[lang]['error'])
 
 @dp.message(F.document)
@@ -198,13 +203,30 @@ async def handle_document(message: types.Message):
         await deduct_credit(message.from_user.id)
         left = user['credits'] - 1
         credits_notice = f"\n\n_(Осталось консультаций: {left})_" if lang == 'ru' else f"\n\n_(Consultations left: {left})_"
-        await message.answer(response.text + credits_notice, parse_mode="Markdown")
-    except Exception:
+        try:
+            await message.answer(response.text + credits_notice, parse_mode="Markdown")
+        except Exception:
+            await message.answer(response.text + credits_notice)
+    except Exception as e:
+        print(f"DEBUG GEMINI DOC ERROR: {e}")
         await message.answer(MESSAGES[lang]['error'])
+
+async def health_check(request):
+    return web.Response(text="OK")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
 
 async def main():
     await init_db()
     await bot.delete_webhook(drop_pending_updates=True)
+    await start_web_server()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
