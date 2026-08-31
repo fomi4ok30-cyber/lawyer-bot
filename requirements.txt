@@ -1,0 +1,5 @@
+aiogram>=3.13.0
+google-generativeai>=0.8.0
+aiosqlite>=0.20.0
+pypdf>=4.3.0
+python-docx>=1.1.2
