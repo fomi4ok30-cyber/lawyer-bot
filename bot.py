@@ -96,7 +96,7 @@ async def query_gemini(user_prompt: str, image_bytes: bytes = None, mime_type: s
     if not GEMINI_API_KEY:
         raise Exception("Переменная окружения GEMINI_API_KEY не найдена в настройках Render!")
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={GEMINI_API_KEY}"
     
     parts = []
     if image_bytes:
