@@ -39,7 +39,7 @@ MESSAGES = {
         'no_credits': "⚠️ У вас закончились консультации. Выберите пакет пополнения через Telegram Stars:",
         'lang_btn': "🌐 Change to English",
         'analyzing_doc': "⏳ Читаю и анализирую ваш документ...",
-        'error': "⚠️ Произошла ошибка при обработке. Попробуйте еще раз."
+        'error': "⚠️ Ошибка обработки:"
     },
     'en': {
         'welcome': (
@@ -54,7 +54,7 @@ MESSAGES = {
         'no_credits': "⚠️ You have run out of consultations. Choose a package with Telegram Stars:",
         'lang_btn': "🌐 Переключить на Русский",
         'analyzing_doc': "⏳ Reading and analyzing your document...",
-        'error': "⚠️ An error occurred. Please try again later."
+        'error': "⚠️ Processing error:"
     }
 }
 
@@ -70,7 +70,10 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 async def query_gemini(user_prompt: str) -> str:
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    if not GEMINI_API_KEY:
+        raise Exception("Переменная окружения GEMINI_API_KEY не найдена в настройках Render!")
+    
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
     payload = {
         "contents": [
             {
@@ -83,12 +86,14 @@ async def query_gemini(user_prompt: str) -> str:
             "temperature": 0.3
         }
     }
+    
     async with aiohttp.ClientSession() as session:
         async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=45)) as resp:
             data = await resp.json()
             if resp.status != 200:
-                print(f"DEBUG GEMINI API ERROR: {data}")
-                raise Exception(f"API Error: {data}")
+                err_msg = data.get("error", {}).get("message", str(data))
+                print(f"DEBUG GEMINI API ERROR: {data}", flush=True)
+                raise Exception(f"Google API Error ({resp.status}): {err_msg}")
             return data["candidates"][0]["content"]["parts"][0]["text"]
 
 def get_main_keyboard(lang: str):
@@ -173,8 +178,8 @@ async def handle_text(message: types.Message):
         except Exception:
             await message.answer(reply_text + credits_notice)
     except Exception as e:
-        print(f"DEBUG ERROR: {e}")
-        await message.answer(MESSAGES[lang]['error'])
+        print(f"DEBUG ERROR: {e}", flush=True)
+        await message.answer(f"⚠️ Ошибка: {str(e)[:300]}")
 
 @dp.message(F.document)
 async def handle_document(message: types.Message):
@@ -217,8 +222,8 @@ async def handle_document(message: types.Message):
         except Exception:
             await message.answer(reply_text + credits_notice)
     except Exception as e:
-        print(f"DEBUG DOC ERROR: {e}")
-        await message.answer(MESSAGES[lang]['error'])
+        print(f"DEBUG DOC ERROR: {e}", flush=True)
+        await message.answer(f"⚠️ Ошибка документа: {str(e)[:300]}")
 
 async def health_check(request):
     return web.Response(text="OK")
