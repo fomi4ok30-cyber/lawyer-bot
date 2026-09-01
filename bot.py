@@ -69,6 +69,23 @@ SYSTEM_PROMPT = (
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+async def send_split_message(chat_id: int, full_text: str):
+    max_length = 3800
+    if len(full_text) <= max_length:
+        try:
+            await bot.send_message(chat_id, full_text, parse_mode="Markdown")
+        except Exception:
+            await bot.send_message(chat_id, full_text)
+        return
+
+    parts = [full_text[i:i + max_length] for i in range(0, len(full_text), max_length)]
+    for part in parts:
+        try:
+            await bot.send_message(chat_id, part, parse_mode="Markdown")
+        except Exception:
+            await bot.send_message(chat_id, part)
+        await asyncio.sleep(0.3)
+
 async def query_gemini(user_prompt: str) -> str:
     if not GEMINI_API_KEY:
         raise Exception("Переменная окружения GEMINI_API_KEY не найдена в настройках Render!")
@@ -92,7 +109,6 @@ async def query_gemini(user_prompt: str) -> str:
             data = await resp.json()
             if resp.status != 200:
                 err_msg = data.get("error", {}).get("message", str(data))
-                print(f"DEBUG GEMINI API ERROR: {data}", flush=True)
                 raise Exception(f"Google API Error ({resp.status}): {err_msg}")
             return data["candidates"][0]["content"]["parts"][0]["text"]
 
@@ -173,12 +189,8 @@ async def handle_text(message: types.Message):
         await deduct_credit(message.from_user.id)
         left = user['credits'] - 1
         credits_notice = f"\n\n_(Осталось консультаций: {left})_" if lang == 'ru' else f"\n\n_(Consultations left: {left})_"
-        try:
-            await message.answer(reply_text + credits_notice, parse_mode="Markdown")
-        except Exception:
-            await message.answer(reply_text + credits_notice)
+        await send_split_message(message.chat.id, reply_text + credits_notice)
     except Exception as e:
-        print(f"DEBUG ERROR: {e}", flush=True)
         await message.answer(f"⚠️ Ошибка: {str(e)[:300]}")
 
 @dp.message(F.document)
@@ -217,12 +229,8 @@ async def handle_document(message: types.Message):
         await deduct_credit(message.from_user.id)
         left = user['credits'] - 1
         credits_notice = f"\n\n_(Осталось консультаций: {left})_" if lang == 'ru' else f"\n\n_(Consultations left: {left})_"
-        try:
-            await message.answer(reply_text + credits_notice, parse_mode="Markdown")
-        except Exception:
-            await message.answer(reply_text + credits_notice)
+        await send_split_message(message.chat.id, reply_text + credits_notice)
     except Exception as e:
-        print(f"DEBUG DOC ERROR: {e}", flush=True)
         await message.answer(f"⚠️ Ошибка документа: {str(e)[:300]}")
 
 async def health_check(request):
