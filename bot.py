@@ -1,6 +1,7 @@
 import os
 import io
 import asyncio
+import aiohttp
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
@@ -10,8 +11,6 @@ from aiogram.types import (
     InlineKeyboardMarkup, 
     InlineKeyboardButton
 )
-from google import genai
-from google.genai import types as genai_types
 from pypdf import PdfReader
 from docx import Document
 
@@ -19,8 +18,6 @@ from database import init_db, get_or_create_user, set_user_language, deduct_cred
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-client = genai.Client(api_key=GEMINI_API_KEY)
 
 TARIFFS = {
     "pack_5": ("Экспресс (5 консультаций)", "Express (5 Consultations)", 5, 150),
@@ -61,18 +58,38 @@ MESSAGES = {
     }
 }
 
-SYSTEM_PROMPT = """
-You are a top-tier international legal advisor and attorney AI.
-Core rules:
-1. Provide legally grounded, structured, and clear legal guidance.
-2. When analyzing contracts/documents: identify high-risk clauses, hidden liabilities, and missing protections.
-3. Always respond in the language of the user's query or document (Russian or English).
-4. Maintain a clear format: Summary -> Legal Analysis -> Risks & Loopholes -> Actionable Recommendations.
-5. Add a brief legal disclaimer that advice is for analytical and educational purposes.
-"""
+SYSTEM_PROMPT = (
+    "You are a top-tier international legal advisor and attorney AI. "
+    "1. Provide legally grounded, structured, and clear guidance. "
+    "2. Identify risks, loopholes, and missing terms. "
+    "3. Respond in the language of the prompt (Russian or English). "
+    "4. Format: Summary -> Analysis -> Risks -> Recommendations -> Disclaimer."
+)
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+
+async def query_gemini(user_prompt: str) -> str:
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": f"{SYSTEM_PROMPT}\n\nUser Question:\n{user_prompt}"}
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.3
+        }
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=45)) as resp:
+            data = await resp.json()
+            if resp.status != 200:
+                print(f"DEBUG GEMINI API ERROR: {data}")
+                raise Exception(f"API Error: {data}")
+            return data["candidates"][0]["content"]["parts"][0]["text"]
 
 def get_main_keyboard(lang: str):
     buttons = []
@@ -147,25 +164,16 @@ async def handle_text(message: types.Message):
         
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     try:
-        config = genai_types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            temperature=0.3
-        )
-        response = await asyncio.to_thread(
-            client.models.generate_content,
-            model="gemini-2.5-flash",
-            contents=message.text,
-            config=config
-        )
+        reply_text = await query_gemini(message.text)
         await deduct_credit(message.from_user.id)
         left = user['credits'] - 1
         credits_notice = f"\n\n_(Осталось консультаций: {left})_" if lang == 'ru' else f"\n\n_(Consultations left: {left})_"
         try:
-            await message.answer(response.text + credits_notice, parse_mode="Markdown")
+            await message.answer(reply_text + credits_notice, parse_mode="Markdown")
         except Exception:
-            await message.answer(response.text + credits_notice)
+            await message.answer(reply_text + credits_notice)
     except Exception as e:
-        print(f"DEBUG GEMINI ERROR: {e}")
+        print(f"DEBUG ERROR: {e}")
         await message.answer(MESSAGES[lang]['error'])
 
 @dp.message(F.document)
@@ -199,26 +207,17 @@ async def handle_document(message: types.Message):
             await message.answer("⚠️ Не удалось прочитать текст документа. Отправьте файл без сканов/картинок.")
             return
 
-        config = genai_types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            temperature=0.2
-        )
-        prompt = f"Perform a comprehensive legal audit on this document:\n\n{extracted_text[:15000]}"
-        response = await asyncio.to_thread(
-            client.models.generate_content,
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=config
-        )
+        doc_prompt = f"Perform a comprehensive legal audit on this document:\n\n{extracted_text[:15000]}"
+        reply_text = await query_gemini(doc_prompt)
         await deduct_credit(message.from_user.id)
         left = user['credits'] - 1
         credits_notice = f"\n\n_(Осталось консультаций: {left})_" if lang == 'ru' else f"\n\n_(Consultations left: {left})_"
         try:
-            await message.answer(response.text + credits_notice, parse_mode="Markdown")
+            await message.answer(reply_text + credits_notice, parse_mode="Markdown")
         except Exception:
-            await message.answer(response.text + credits_notice)
+            await message.answer(reply_text + credits_notice)
     except Exception as e:
-        print(f"DEBUG GEMINI DOC ERROR: {e}")
+        print(f"DEBUG DOC ERROR: {e}")
         await message.answer(MESSAGES[lang]['error'])
 
 async def health_check(request):
