@@ -1,6 +1,8 @@
 import os
 import io
+import base64
 import asyncio
+import logging
 import aiohttp
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types, F
@@ -15,6 +17,9 @@ from pypdf import PdfReader
 from docx import Document
 
 from database import init_db, get_or_create_user, set_user_language, deduct_credit, add_credits
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -31,10 +36,10 @@ MESSAGES = {
             "⚖️ **Добро пожаловать в ИИ-Адвокат!**\n\n"
             "Я ваш персональный юридический ассистент на базе Google Gemini.\n"
             "• Правовые консультации (РФ и международное право)\n"
-            "• Аудит договоров и документов (PDF, DOCX, TXT)\n"
+            "• Аудит договоров и документов (PDF, DOCX, TXT, Фото)\n"
             "• Анализ рисков и помощь в составлении претензий\n\n"
             "🎁 У вас есть **{credits} бесплатные консультации**.\n"
-            "Отправьте ваш вопрос текстом или прикрепите файл документа."
+            "Отправьте ваш вопрос текстом, прикрепите файл документа или пришлите фото."
         ),
         'no_credits': "⚠️ У вас закончились консультации. Выберите пакет пополнения через Telegram Stars:",
         'lang_btn': "🌐 Change to English",
@@ -46,10 +51,10 @@ MESSAGES = {
             "⚖️ **Welcome to AI Lawyer!**\n\n"
             "I am your personal legal assistant powered by Google Gemini.\n"
             "• Legal consultations (international & civil law)\n"
-            "• Contract analysis & risk audit (PDF, DOCX, TXT)\n"
+            "• Contract analysis & risk audit (PDF, DOCX, TXT, Photo)\n"
             "• Risk detection and dispute assistance\n\n"
             "🎁 You have **{credits} free consultations**.\n"
-            "Send your legal inquiry or attach a document to start."
+            "Send your legal inquiry, attach a document, or upload a photo."
         ),
         'no_credits': "⚠️ You have run out of consultations. Choose a package with Telegram Stars:",
         'lang_btn': "🌐 Переключить на Русский",
@@ -69,39 +74,40 @@ SYSTEM_PROMPT = (
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-async def send_split_message(chat_id: int, full_text: str):
+async def send_split_message(chat_id: int, full_text: str, reply_markup=None):
     max_length = 3800
     if len(full_text) <= max_length:
         try:
-            await bot.send_message(chat_id, full_text, parse_mode="Markdown")
+            await bot.send_message(chat_id, full_text, parse_mode="Markdown", reply_markup=reply_markup)
         except Exception:
-            await bot.send_message(chat_id, full_text)
+            await bot.send_message(chat_id, full_text, reply_markup=reply_markup)
         return
 
     parts = [full_text[i:i + max_length] for i in range(0, len(full_text), max_length)]
-    for part in parts:
+    for idx, part in enumerate(parts):
+        markup = reply_markup if idx == len(parts) - 1 else None
         try:
-            await bot.send_message(chat_id, part, parse_mode="Markdown")
+            await bot.send_message(chat_id, part, parse_mode="Markdown", reply_markup=markup)
         except Exception:
-            await bot.send_message(chat_id, part)
+            await bot.send_message(chat_id, part, reply_markup=markup)
         await asyncio.sleep(0.3)
 
-async def query_gemini(user_prompt: str) -> str:
+async def query_gemini(user_prompt: str, image_bytes: bytes = None, mime_type: str = "image/jpeg") -> str:
     if not GEMINI_API_KEY:
         raise Exception("Переменная окружения GEMINI_API_KEY не найдена в настройках Render!")
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    
+    parts = []
+    if image_bytes:
+        encoded_image = base64.b64encode(image_bytes).decode("utf-8")
+        parts.append({"inline_data": {"mime_type": mime_type, "data": encoded_image}})
+    
+    parts.append({"text": f"{SYSTEM_PROMPT}\n\nUser Question:\n{user_prompt}"})
+    
     payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": f"{SYSTEM_PROMPT}\n\nUser Question:\n{user_prompt}"}
-                ]
-            }
-        ],
-        "generationConfig": {
-            "temperature": 0.3
-        }
+        "contents": [{"parts": parts}],
+        "generationConfig": {"temperature": 0.3}
     }
     
     async with aiohttp.ClientSession() as session:
@@ -123,19 +129,16 @@ def get_main_keyboard(lang: str):
 
 @dp.message(CommandStart())
 async def start_handler(message: types.Message):
-    # Автоопределение языка Telegram (ru/be/uk -> ru, остальные -> en)
     raw_lang = message.from_user.language_code or "en"
     detected_lang = (
         "ru" if any(raw_lang.startswith(c) for c in ("ru", "be", "uk")) else "en"
     )
 
-    # Получаем или создаем пользователя (строго 2 аргумента)
     user = await get_or_create_user(
         message.from_user.id,
         message.from_user.username,
     )
 
-    # Если язык в базе уже сохранен — берем его, иначе ставим определенный
     lang = user.get("lang") or detected_lang
     credits_left = user.get("credits", 3)
 
@@ -143,9 +146,6 @@ async def start_handler(message: types.Message):
     await message.answer(
         text, reply_markup=get_main_keyboard(lang), parse_mode="Markdown"
     )
-
-
-
 
 @dp.callback_query(F.data == "toggle_lang")
 async def toggle_lang_handler(call: types.CallbackQuery):
@@ -193,6 +193,42 @@ async def process_successful_payment(message: types.Message):
     success_msg = f"✅ Оплата прошла! Начислено {credits_to_add} консультаций." if user['lang'] == 'ru' else f"✅ Payment successful! {credits_to_add} consultations added."
     await message.answer(success_msg)
 
+@dp.message(F.photo)
+async def handle_photo(message: types.Message):
+    user = await get_or_create_user(message.from_user.id)
+    lang = user['lang']
+    if user['credits'] <= 0:
+        await message.answer(MESSAGES[lang]['no_credits'], reply_markup=get_main_keyboard(lang))
+        return
+
+    status_msg = await message.answer(MESSAGES[lang]['analyzing_doc'])
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+
+    try:
+        photo = message.photo[-1]
+        file = await bot.get_file(photo.file_id)
+        file_io = io.BytesIO()
+        await bot.download_file(file.file_path, destination=file_io)
+        image_data = file_io.getvalue()
+
+        default_prompt = (
+            "Проведи полный юридический аудит документа на фото. Распознай текст, выдели предмет сделки, скрытые риски, штрафы и кабальные условия."
+            if lang == "ru"
+            else "Perform a comprehensive legal audit on this document photo. Extract text, evaluate terms, hidden risks, penalties, and liability."
+        )
+        prompt = message.caption if message.caption else default_prompt
+
+        reply_text = await query_gemini(user_prompt=prompt, image_bytes=image_data, mime_type="image/jpeg")
+        await deduct_credit(message.from_user.id)
+        left = user['credits'] - 1
+        credits_notice = f"\n\n_(Осталось консультаций: {left})_" if lang == 'ru' else f"\n\n_(Consultations left: {left})_"
+
+        await status_msg.delete()
+        await send_split_message(message.chat.id, reply_text + credits_notice, reply_markup=get_main_keyboard(lang))
+    except Exception as e:
+        await status_msg.delete()
+        await message.answer(f"⚠️ Ошибка фото: {str(e)[:300]}")
+
 @dp.message(F.text)
 async def handle_text(message: types.Message):
     user = await get_or_create_user(message.from_user.id)
@@ -203,11 +239,11 @@ async def handle_text(message: types.Message):
         
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     try:
-        reply_text = await query_gemini(message.text)
+        reply_text = await query_gemini(user_prompt=message.text)
         await deduct_credit(message.from_user.id)
         left = user['credits'] - 1
         credits_notice = f"\n\n_(Осталось консультаций: {left})_" if lang == 'ru' else f"\n\n_(Consultations left: {left})_"
-        await send_split_message(message.chat.id, reply_text + credits_notice)
+        await send_split_message(message.chat.id, reply_text + credits_notice, reply_markup=get_main_keyboard(lang))
     except Exception as e:
         await message.answer(f"⚠️ Ошибка: {str(e)[:300]}")
 
@@ -220,7 +256,8 @@ async def handle_document(message: types.Message):
         return
 
     doc = message.document
-    await message.answer(MESSAGES[lang]['analyzing_doc'])
+    status_msg = await message.answer(MESSAGES[lang]['analyzing_doc'])
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     file_io = io.BytesIO()
     file = await bot.get_file(doc.file_id)
     await bot.download_file(file.file_path, destination=file_io)
@@ -239,16 +276,19 @@ async def handle_document(message: types.Message):
             extracted_text = file_io.read().decode('utf-8', errors='ignore')
             
         if not extracted_text.strip():
-            await message.answer("⚠️ Не удалось прочитать текст документа. Отправьте файл без сканов/картинок.")
+            await status_msg.delete()
+            await message.answer("⚠️ Не удалось прочитать текст документа. Отправьте файл с текстом или просто сфотографируйте страницы.")
             return
 
         doc_prompt = f"Perform a comprehensive legal audit on this document:\n\n{extracted_text[:15000]}"
-        reply_text = await query_gemini(doc_prompt)
+        reply_text = await query_gemini(user_prompt=doc_prompt)
         await deduct_credit(message.from_user.id)
         left = user['credits'] - 1
         credits_notice = f"\n\n_(Осталось консультаций: {left})_" if lang == 'ru' else f"\n\n_(Consultations left: {left})_"
-        await send_split_message(message.chat.id, reply_text + credits_notice)
+        await status_msg.delete()
+        await send_split_message(message.chat.id, reply_text + credits_notice, reply_markup=get_main_keyboard(lang))
     except Exception as e:
+        await status_msg.delete()
         await message.answer(f"⚠️ Ошибка документа: {str(e)[:300]}")
 
 async def health_check(request):
