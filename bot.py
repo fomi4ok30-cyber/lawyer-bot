@@ -123,26 +123,28 @@ def get_main_keyboard(lang: str):
 
 @dp.message(CommandStart())
 async def start_handler(message: types.Message):
-    # Автоопределение языка Telegram
+    # Автоопределение языка Telegram (ru/be/uk -> ru, остальные -> en)
     raw_lang = message.from_user.language_code or "en"
     detected_lang = (
         "ru" if any(raw_lang.startswith(c) for c in ("ru", "be", "uk")) else "en"
     )
 
-    # Получаем или создаем пользователя
+    # Получаем или создаем пользователя (строго 2 аргумента)
     user = await get_or_create_user(
         message.from_user.id,
         message.from_user.username,
-        detected_lang,
     )
 
-    lang = user.get("lang", detected_lang)
+    # Если язык в базе уже сохранен — берем его, иначе ставим определенный
+    lang = user.get("lang") or detected_lang
     credits_left = user.get("credits", 3)
 
     text = MESSAGES[lang]["welcome"].format(credits=credits_left)
     await message.answer(
         text, reply_markup=get_main_keyboard(lang), parse_mode="Markdown"
     )
+
+
 
 
 @dp.callback_query(F.data == "toggle_lang")
