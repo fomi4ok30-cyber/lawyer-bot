@@ -11,6 +11,7 @@ from aiogram.types import (
     InlineKeyboardButton
 )
 from google import genai
+from google.genai import types as genai_types
 from pypdf import PdfReader
 from docx import Document
 
@@ -146,11 +147,15 @@ async def handle_text(message: types.Message):
         
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     try:
-        prompt_with_sys = f"{SYSTEM_PROMPT}\n\nUser Question: {message.text}"
+        config = genai_types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            temperature=0.3
+        )
         response = await asyncio.to_thread(
             client.models.generate_content,
             model="gemini-2.5-flash",
-            contents=prompt_with_sys
+            contents=message.text,
+            config=config
         )
         await deduct_credit(message.from_user.id)
         left = user['credits'] - 1
@@ -194,11 +199,16 @@ async def handle_document(message: types.Message):
             await message.answer("⚠️ Не удалось прочитать текст документа. Отправьте файл без сканов/картинок.")
             return
 
-        prompt = f"{SYSTEM_PROMPT}\n\nPerform a comprehensive legal audit on this document:\n\n{extracted_text[:15000]}"
+        config = genai_types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            temperature=0.2
+        )
+        prompt = f"Perform a comprehensive legal audit on this document:\n\n{extracted_text[:15000]}"
         response = await asyncio.to_thread(
             client.models.generate_content,
             model="gemini-2.5-flash",
-            contents=prompt
+            contents=prompt,
+            config=config
         )
         await deduct_credit(message.from_user.id)
         left = user['credits'] - 1
