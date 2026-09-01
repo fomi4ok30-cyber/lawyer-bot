@@ -10,7 +10,7 @@ from aiogram.types import (
     InlineKeyboardMarkup, 
     InlineKeyboardButton
 )
-import google.generativeai as genai
+from google import genai
 from pypdf import PdfReader
 from docx import Document
 
@@ -19,7 +19,7 @@ from database import init_db, get_or_create_user, set_user_language, deduct_cred
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-genai.configure(api_key=GEMINI_API_KEY)
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 TARIFFS = {
     "pack_5": ("Экспресс (5 консультаций)", "Express (5 Consultations)", 5, 150),
@@ -70,7 +70,6 @@ Core rules:
 5. Add a brief legal disclaimer that advice is for analytical and educational purposes.
 """
 
-model = genai.GenerativeModel("gemini-1.5-flash", system_instruction=SYSTEM_PROMPT)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
@@ -80,7 +79,6 @@ def get_main_keyboard(lang: str):
         title = plan_data[0] if lang == 'ru' else plan_data[1]
         stars = plan_data[3]
         buttons.append([InlineKeyboardButton(text=f"⭐ {title} — {stars} Stars", callback_data=f"buy:{plan_id}")])
-    
     buttons.append([InlineKeyboardButton(text=MESSAGES[lang]['lang_btn'], callback_data="toggle_lang")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -106,15 +104,12 @@ async def send_invoice_handler(call: types.CallbackQuery):
     plan_id = call.data.split(":")[1]
     if plan_id not in TARIFFS:
         return
-    
     plan = TARIFFS[plan_id]
     user = await get_or_create_user(call.from_user.id)
     lang = user['lang']
-    
     title = plan[0] if lang == 'ru' else plan[1]
     stars = plan[3]
     credits_count = plan[2]
-    
     desc = f"Пакет на {credits_count} консультаций" if lang == 'ru' else f"Package of {credits_count} consultations"
 
     await bot.send_invoice(
@@ -136,10 +131,8 @@ async def process_pre_checkout(pre_checkout_query: PreCheckoutQuery):
 async def process_successful_payment(message: types.Message):
     payload = message.successful_payment.invoice_payload
     credits_to_add = int(payload.split(":")[1])
-    
     await add_credits(message.from_user.id, credits_to_add)
     user = await get_or_create_user(message.from_user.id)
-    
     success_msg = f"✅ Оплата прошла! Начислено {credits_to_add} консультаций." if user['lang'] == 'ru' else f"✅ Payment successful! {credits_to_add} consultations added."
     await message.answer(success_msg)
 
@@ -147,14 +140,18 @@ async def process_successful_payment(message: types.Message):
 async def handle_text(message: types.Message):
     user = await get_or_create_user(message.from_user.id)
     lang = user['lang']
-    
     if user['credits'] <= 0:
         await message.answer(MESSAGES[lang]['no_credits'], reply_markup=get_main_keyboard(lang))
         return
         
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     try:
-        response = await asyncio.to_thread(model.generate_content, message.text)
+        prompt_with_sys = f"{SYSTEM_PROMPT}\n\nUser Question: {message.text}"
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model="gemini-2.5-flash",
+            contents=prompt_with_sys
+        )
         await deduct_credit(message.from_user.id)
         left = user['credits'] - 1
         credits_notice = f"\n\n_(Осталось консультаций: {left})_" if lang == 'ru' else f"\n\n_(Consultations left: {left})_"
@@ -170,7 +167,6 @@ async def handle_text(message: types.Message):
 async def handle_document(message: types.Message):
     user = await get_or_create_user(message.from_user.id)
     lang = user['lang']
-    
     if user['credits'] <= 0:
         await message.answer(MESSAGES[lang]['no_credits'], reply_markup=get_main_keyboard(lang))
         return
@@ -198,8 +194,12 @@ async def handle_document(message: types.Message):
             await message.answer("⚠️ Не удалось прочитать текст документа. Отправьте файл без сканов/картинок.")
             return
 
-        prompt = f"Perform a comprehensive legal audit on this document:\n\n{extracted_text[:15000]}"
-        response = await asyncio.to_thread(model.generate_content, prompt)
+        prompt = f"{SYSTEM_PROMPT}\n\nPerform a comprehensive legal audit on this document:\n\n{extracted_text[:15000]}"
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
         await deduct_credit(message.from_user.id)
         left = user['credits'] - 1
         credits_notice = f"\n\n_(Осталось консультаций: {left})_" if lang == 'ru' else f"\n\n_(Consultations left: {left})_"
