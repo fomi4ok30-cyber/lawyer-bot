@@ -39,7 +39,7 @@ MESSAGES = {
         'no_credits': "⚠️ У вас закончились консультации. Выберите пакет пополнения через Telegram Stars:",
         'lang_btn': "🌐 Change to English",
         'analyzing_doc': "⏳ Читаю и анализирую ваш документ...",
-        'error': "⚠️ Ошибка обработки:"
+        'error': "⚠️ Произошла ошибка при обработке."
     },
     'en': {
         'welcome': (
@@ -54,7 +54,7 @@ MESSAGES = {
         'no_credits': "⚠️ You have run out of consultations. Choose a package with Telegram Stars:",
         'lang_btn': "🌐 Переключить на Русский",
         'analyzing_doc': "⏳ Reading and analyzing your document...",
-        'error': "⚠️ Processing error:"
+        'error': "⚠️ An error occurred during processing."
     }
 }
 
@@ -73,7 +73,7 @@ async def query_gemini(user_prompt: str) -> str:
     if not GEMINI_API_KEY:
         raise Exception("Переменная окружения GEMINI_API_KEY не найдена в настройках Render!")
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={GEMINI_API_KEY}"
     payload = {
         "contents": [
             {
