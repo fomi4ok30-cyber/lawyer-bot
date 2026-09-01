@@ -70,7 +70,7 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 async def query_gemini(user_prompt: str) -> str:
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
     payload = {
         "contents": [
             {
@@ -236,7 +236,7 @@ async def main():
     await init_db()
     await bot.delete_webhook(drop_pending_updates=True)
     await start_web_server()
-    await dp.start_polling(bot)
+    await dp.start_polling(bot, handle_signals=False)
 
 if __name__ == "__main__":
     asyncio.run(main())
